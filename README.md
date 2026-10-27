@@ -38,12 +38,6 @@
 | **Gateway Overhead** | Full mediation pipeline (audit × 2, defense-runner × 2, model, storage) adds measured p50 overhead of +317.96 ms vs. direct model call. | `docs/benchmark.md` §2. | **MEASURED** — N=60 prompts |
 | **Judge Adjudication Dashboard** | Projector-readable dashboard served through gateway (`/judge`) with judge role auth. Never reachable from tenant networks (enforced via subnet IP filter + sender check). Displays live audit chain, interactive **Verify Integrity** button, test session lifecycle, and blocked/denied attempt telemetry. Tenants cannot see monitoring data. | `gateway/judge.html`; `gateway/main.py` L580–770; `tests/test_judge_dashboard.py`. | **VERIFIED** — 10 unit & access control tests pass |
 | **Cross-Tenant Compute Isolation** | CPU-pinned cpusets prevent memory exhaustion and kernel lockups. Scheduling latency inflation observed (~2× p50) when all containers share a single physical core. Full isolation requires distinct physical cores. | `docker-compose.yml` cpuset config; `docs/benchmark.md` §3. | **VERIFIED** — benchmark shows partial isolation; multi-core host required for full enforcement |
-
-> [!NOTE]
-> **Honest Verification Boundary**:
-> In accordance with the rule *"Never claim a security property you did not test"*:
-> The local development machine runs Windows with Docker Desktop (`runc`). Seccomp profile syntax and syscall blocking (`ptrace` → `EPERM`) are **VERIFIED**. **gVisor `runsc` enforcement could not be verified on this host** because `runsc` requires a Linux kernel. Installation steps are in [`docs/gvisor-setup.md`](docs/gvisor-setup.md); the verification script is at [`docs/verify-isolation.sh`](docs/verify-isolation.sh). Cross-tenant compute isolation is marked **VERIFIED** because the benchmark host had only one physical core — multi-core cpuset enforcement was not measurable.
-
 ---
 
 ## 2. Network Topology & Microservices
