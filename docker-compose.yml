@@ -1,0 +1,345 @@
+services:
+  # ==============================================================================
+  # GATEWAY SERVICE
+  # The central hub joined to all internal networks and the external gateway-net.
+  # Hardened: gVisor (runsc), read-only rootfs, dropped capabilities, seccomp.
+  # ==============================================================================
+  gateway:
+    build:
+      context: ./gateway
+      dockerfile: Dockerfile
+    container_name: bayora-gateway
+    runtime: ${DOCKER_RUNTIME:-runsc}
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64M
+    volumes:
+      - red_payloads:/data/red_payloads
+      - blue_logic:/data/blue_logic
+      - blue_releases:/data/blue_releases
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    cpus: ${GATEWAY_CPUS:-1.0}
+    mem_limit: ${GATEWAY_MEM_LIMIT:-512m}
+    cpuset: "${GATEWAY_CPUSET:-0}"
+    environment:
+      - RED_PAYLOADS_DIR=/data/red_payloads
+      - BLUE_LOGIC_DIR=/data/blue_logic
+      - BLUE_RELEASES_DIR=/data/blue_releases
+      - MODEL_SERVICE_URL=http://model-service:8000
+      - DEFENSE_RUNNER_URL=http://defense-runner:8000
+      - AUDIT_SERVICE_URL=http://audit:8000
+    networks:
+      gateway-net:
+        ipv4_address: 172.28.1.2
+      red-net:
+        ipv4_address: 172.28.2.2
+      blue-net:
+        ipv4_address: 172.28.3.2
+      model-net:
+        ipv4_address: 172.28.4.2
+      defense-net:
+        ipv4_address: 172.28.5.2
+      audit-net:
+        ipv4_address: 172.28.6.2
+    extra_hosts:
+      - "model-service:172.28.4.3"
+      - "defense-runner:172.28.5.3"
+      - "audit:172.28.6.3"
+      - "red-team:172.28.2.3"
+      - "blue-team:172.28.3.3"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./policies/seccomp/gateway.json
+
+  # ==============================================================================
+  # RED TEAM SERVICE
+  # Isolated to red-net. No direct route to any other tenant.
+  # Hardened: gVisor (runsc), read-only rootfs, dropped capabilities, seccomp.
+  # Note: red-team strictly NEVER mounts blue_logic or blue_releases volumes.
+  # ==============================================================================
+  red-team:
+    build:
+      context: ./red-team
+      dockerfile: Dockerfile
+    container_name: bayora-red-team
+    runtime: ${DOCKER_RUNTIME:-runsc}
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64M
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    cpus: ${RED_CPUS:-1.0}
+    mem_limit: ${RED_MEM_LIMIT:-256m}
+    cpuset: "${RED_CPUSET:-0}"
+    # blkio_config (requires BFQ I/O scheduler; disabled on WSL2/Docker Desktop where io.weight is unavailable)
+    # blkio_config:
+    #   weight: 300
+    environment:
+      - GATEWAY_URL=http://gateway:8000
+    networks:
+      red-net:
+        ipv4_address: 172.28.2.3
+    extra_hosts:
+      - "gateway:172.28.2.2"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./policies/seccomp/red-team.json
+
+  # ==============================================================================
+  # BLUE TEAM SERVICE
+  # Isolated to blue-net. No direct route to any other tenant.
+  # Hardened: gVisor (runsc), read-only rootfs, dropped capabilities, seccomp.
+  # Note: blue-team strictly NEVER mounts red_payloads volume.
+  # ==============================================================================
+  blue-team:
+    build:
+      context: ./blue-team
+      dockerfile: Dockerfile
+    container_name: bayora-blue-team
+    runtime: ${DOCKER_RUNTIME:-runsc}
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64M
+    volumes:
+      - blue_releases:/data/blue_releases:ro
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    cpus: ${BLUE_CPUS:-1.0}
+    mem_limit: ${BLUE_MEM_LIMIT:-256m}
+    cpuset: "${BLUE_CPUSET:-0}"
+    # blkio_config (requires BFQ I/O scheduler; disabled on WSL2/Docker Desktop where io.weight is unavailable)
+    # blkio_config:
+    #   weight: 300
+    environment:
+      - GATEWAY_URL=http://gateway:8000
+      - BLUE_RELEASES_DIR=/data/blue_releases
+    networks:
+      blue-net:
+        ipv4_address: 172.28.3.3
+    extra_hosts:
+      - "gateway:172.28.3.2"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./policies/seccomp/blue-team.json
+
+  # ==============================================================================
+  # MODEL SERVICE
+  # Isolated to model-net. No direct route to any other tenant.
+  # Hardened: gVisor (runsc), read-only rootfs, dropped capabilities, seccomp.
+  # ==============================================================================
+  model-service:
+    build:
+      context: ./model-service
+      dockerfile: Dockerfile
+    container_name: bayora-model-service
+    runtime: ${DOCKER_RUNTIME:-runsc}
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64M
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    cpus: ${MODEL_CPUS:-1.0}
+    mem_limit: ${MODEL_MEM_LIMIT:-512m}
+    cpuset: "${MODEL_CPUSET:-0}"
+    environment:
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GROQ_MODEL=${GROQ_MODEL:-openai/gpt-oss-20b}
+      - HTTPS_PROXY=http://egress-proxy:3128
+      - HTTP_PROXY=http://egress-proxy:3128
+      - NO_PROXY=localhost,127.0.0.1
+      - no_proxy=localhost,127.0.0.1
+    networks:
+      model-net:
+        ipv4_address: 172.28.4.3
+    extra_hosts:
+      - "gateway:172.28.4.2"
+      - "egress-proxy:172.28.4.4"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./policies/seccomp/model-service.json
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ==============================================================================
+  # EGRESS PROXY SERVICE
+  # Dual-homed bridge (model-net & egress-net).
+  # Strictly filters outbound HTTPS CONNECT requests to api.groq.com:443 only.
+  # Hardened: gVisor (runsc), read-only rootfs, dropped capabilities, seccomp.
+  # ==============================================================================
+  egress-proxy:
+    build:
+      context: ./egress-proxy
+      dockerfile: Dockerfile
+    container_name: bayora-egress-proxy
+    runtime: ${DOCKER_RUNTIME:-runsc}
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64M
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    cpus: ${PROXY_CPUS:-0.5}
+    mem_limit: ${PROXY_MEM_LIMIT:-128m}
+    environment:
+      - PROXY_PORT=3128
+      - ALLOWED_HOSTS=api.groq.com
+      - ALLOWED_PORTS=443
+    networks:
+      model-net:
+        ipv4_address: 172.28.4.4
+      egress-net:
+        ipv4_address: 172.28.7.2
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./policies/seccomp/egress-proxy.json
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:3128/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+
+  # ==============================================================================
+  # DEFENSE RUNNER SERVICE
+  # Isolated to defense-net (internal: true, no internet, zero lateral tenant routes).
+  # Hardened: gVisor (runsc), read-only rootfs, dropped capabilities, seccomp.
+  # ==============================================================================
+  defense-runner:
+    build:
+      context: ./defense-runner
+      dockerfile: Dockerfile
+    container_name: bayora-defense-runner
+    runtime: ${DOCKER_RUNTIME:-runsc}
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64M
+    volumes:
+      - blue_logic:/data/blue_logic:ro
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    cpus: ${DEFENSE_CPUS:-1.0}
+    mem_limit: ${DEFENSE_MEM_LIMIT:-256m}
+    environment:
+      - BLUE_LOGIC_DIR=/data/blue_logic
+    networks:
+      defense-net:
+        ipv4_address: 172.28.5.3
+    extra_hosts:
+      - "gateway:172.28.5.2"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./policies/seccomp/defense-runner.json
+
+  # ==============================================================================
+  # AUDIT SERVICE
+  # Isolated to audit-net. No direct route to any other tenant.
+  # Hardened: gVisor (runsc), read-only rootfs, dropped capabilities, seccomp.
+  # ==============================================================================
+  audit:
+    build:
+      context: ./audit
+      dockerfile: Dockerfile
+    container_name: bayora-audit
+    runtime: ${DOCKER_RUNTIME:-runsc}
+    user: "10001:10001"
+    read_only: true
+    tmpfs:
+      - /tmp:mode=1777,size=64M
+    volumes:
+      - audit_store:/data/audit
+    cap_drop:
+      - ALL
+    restart: unless-stopped
+    cpus: ${AUDIT_CPUS:-1.0}
+    mem_limit: ${AUDIT_MEM_LIMIT:-256m}
+    environment:
+      - AUDIT_STORE_DIR=/data/audit
+    networks:
+      audit-net:
+        ipv4_address: 172.28.6.3
+    extra_hosts:
+      - "gateway:172.28.6.2"
+    security_opt:
+      - no-new-privileges:true
+      - seccomp=./policies/seccomp/audit.json
+
+# ==============================================================================
+# VOLUMES CONFIGURATION
+# Structured for zero-trust tenant store sequestration
+# ==============================================================================
+volumes:
+  red_payloads:
+    name: bayora_red_payloads
+  blue_logic:
+    name: bayora_blue_logic
+  blue_releases:
+    name: bayora_blue_releases
+  audit_store:
+    name: bayora_audit_store
+
+# ==============================================================================
+# NETWORKS CONFIGURATION
+# All internal: true except gateway-net (which is gateway only)
+# Explicit IPAM subnets with static IP assignment for gVisor compatibility
+# ==============================================================================
+networks:
+  gateway-net:
+    driver: bridge
+    internal: false
+    ipam:
+      config:
+        - subnet: 172.28.1.0/24
+  red-net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.2.0/24
+  blue-net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.3.0/24
+  model-net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.4.0/24
+  defense-net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.5.0/24
+  audit-net:
+    driver: bridge
+    internal: true
+    ipam:
+      config:
+        - subnet: 172.28.6.0/24
+  egress-net:
+    driver: bridge
+    internal: false
+    ipam:
+      config:
+        - subnet: 172.28.7.0/24

@@ -1,0 +1,1 @@
+# Egress proxy uses pure standard library asyncio (zero pip dependencies)
